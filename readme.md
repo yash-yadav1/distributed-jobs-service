@@ -1,25 +1,56 @@
-?. if it exists then do this 
+# Create directory
 mkdir src
+
+# Create file
 touch server.ts
+
+
+# ─────────────────────────────
+# API TESTING
+# ─────────────────────────────
+
+# Get all jobs
 curl -X GET http://localhost:3000/jobs
-curl -X GET http://localhost:3000/jobs/1   
 
-curl -X PATCH http://localhost:3000/jobs/1 -H "Content-Type: application/json" -d '{"status":"banana"}'
+# Get a particular job
+curl -X GET http://localhost:3000/jobs/1
 
-curl -X POST http://localhost:3000/jobs   -H "Content-Type: application/json"   -d '{"command":"npm test","image":"node:24"}'
+# Update job status
+curl -X PATCH http://localhost:3000/jobs/1 \
+-H "Content-Type: application/json" \
+-d '{"status":"banana"}'
 
-to define particular type const job:Job={
-    x:y,
-    z:a,
-    b:c
+# Create a job
+curl -X POST http://localhost:3000/jobs \
+-H "Content-Type: application/json" \
+-d '{"command":"npm test","image":"node:24"}'
+
+
+# ─────────────────────────────
+# TYPESCRIPT
+# ─────────────────────────────
+
+# Define a variable with a particular type
+
+const job: Job = {
+    x: y,
+    z: a,
+    b: c
 };
 
-docker exec -it distributed-jobs-db psql -U postgres -d jobsdb   // to connect postres with docker 
 
-q-docker  like ctrl + c
-\q to exit docker 
+# ─────────────────────────────
+# POSTGRES + DOCKER
+# ─────────────────────────────
 
+# Open PostgreSQL inside the Docker container
 
-docker exec -it distributed-jobs-db psql -U postgres -d jobsdb   for opening postgres
+docker exec -it distributed-jobs-db \
+psql -U postgres -d jobsdb
 
+# Exit PostgreSQL
+\q
+
+# Stop/exit an interactive process
+Ctrl + C
 
