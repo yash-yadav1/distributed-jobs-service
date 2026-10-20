@@ -1,6 +1,6 @@
 import {Job,JobStatus} from "../types";
 import { pool } from "../db";
-
+import {randomUUID} from "crypto";
 
 const validStatuses : JobStatus[] = ["queued" , "running" , "succeeded" , "failed" , "dead"];
 
@@ -77,6 +77,11 @@ export async function claimJob() : Promise<Job | undefined>{
             SELECT *
             FROM jobs
             WHERE status = 'queued'
+            OR (
+                status='running' 
+                AND lease_until IS NOT NULL
+                AND lease_until < NOW()
+                )
             ORDER BY id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
@@ -87,14 +92,18 @@ export async function claimJob() : Promise<Job | undefined>{
             return undefined;
         }
         const job=result.rows[0];
+        const leaseToken=randomUUID();
+
 
         const updated=await client.query(
             `UPDATE jobs
              SET status = 'running',
-                 attempts = attempts + 1
-             WHERE id = $1
+                attempts = attempts + 1,
+                lease_until = NOW() + INTERVAL '90 seconds',
+                lease_token = $1
+             WHERE id = $2
              RETURNING *`,
-            [job.id]
+            [leaseToken,job.id]
         );
         await client.query("COMMIT");
         return updated.rows[0];
@@ -108,13 +117,39 @@ export async function claimJob() : Promise<Job | undefined>{
 }
 
 
-export async function completeJob(id : number,status: "succeeded"| "failed") : Promise<Job | undefined>{
+export async function completeJob(id : number,leaseToken: string,status: "succeeded"| "failed") : Promise<Job | undefined>{
     const result=await pool.query(
         `UPDATE jobs
-         SET status = $1
-         WHERE id = $2
+         SET status = $1,
+            lease_until = NULL,
+            lease_token = NULL
+        WHERE id = $2
+            AND status = 'running'
+            AND lease_token = $3
          RETURNING *`,
-        [status, id]
+        [status, id,leaseToken]
+    );
+    return result.rows[0];
+}
+
+
+export async function failJob(id: number ,leaseToken: string) : Promise<Job | undefined > {
+    const result=await pool.query(
+        `
+        UPDATE jobs
+        SET status = CASE
+                WHEN attempts <= max_retries
+                THEN 'queued'
+                ELSE 'dead'
+            END,
+            lease_until = NULL,
+            lease_token = NULL
+        WHERE id = $1
+            AND status = 'running'
+            AND lease_token = $2
+         RETURNING *
+        `
+        ,[id,leaseToken]
     );
     return result.rows[0];
 }

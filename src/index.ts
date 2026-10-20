@@ -4,7 +4,6 @@ import http from "http";
 
 import { createJob , getJob , getJobs , updateJobStatus ,getJobsByProject} from "./services/jobs";
 
-// import "./db";
 
 import { createProject,getProjects,getProject,updateProject } from "./services/projects";
 
@@ -14,6 +13,7 @@ const server=http.createServer(async (req,res)=>{
 
     //GET BASIC
     if (req.method === "GET" && req.url === "/") {
+        res.statusCode = 200;
         res.end("Welcome to the Distributed Job Service");
         return;
     }
@@ -26,6 +26,7 @@ const server=http.createServer(async (req,res)=>{
             const jobs = await getJobs();
 
             res.setHeader("Content-Type", "application/json");
+            res.statusCode = 200;
             res.end(JSON.stringify(jobs));
         }
         catch (error) {
@@ -58,6 +59,7 @@ const server=http.createServer(async (req,res)=>{
 
                 return;
             }
+            res.statusCode = 200;
             res.end(JSON.stringify(job));
         }
         catch(error) {
@@ -116,12 +118,12 @@ const server=http.createServer(async (req,res)=>{
         req.on("end", async () => {
 
             try {
-                const data = JSON.parse(body);
+                const data = JSON.parse(body);//divide the data to js object
                 
-                const result=await updateJobStatus(id,data.status);
+                const result=await updateJobStatus(id,data.status);//update job status  & return result={job , error} in object 
 
                 if (result.error) {
-                    res.statusCode = result.error === "Job not found" ? 404 : 400;
+                    res.statusCode = result.error === "Job not found" ? 404 : 400;//check which kind of error job found or not
 
                     res.setHeader("Content-Type", "application/json");
                     res.end(JSON.stringify({
@@ -370,6 +372,7 @@ const server=http.createServer(async (req,res)=>{
         });
         return;
     }
+
     res.statusCode = 404;
     res.end("Not Found");
 });
