@@ -1,6 +1,6 @@
 import {Job,JobStatus} from "../types";
 import { pool } from "../db";
-import {randomUUID} from "crypto";
+import {randomUUID} from "node:crypto";
 
 const validStatuses : JobStatus[] = ["queued" , "running" , "succeeded" , "failed" , "dead"];
 
@@ -35,18 +35,34 @@ export async function updateJobStatus(id: number,status : JobStatus) : Promise<{
         return {error: "invalid status "};
     }
     
+    if (status !== "queued" && status !== "dead") {
+        return { error: "This status must be changed through the job execution lifecycle" }; 
+    }
+
     const result = await pool.query(
         `UPDATE jobs
-         SET status = $1
+         SET status = $1,
+         lease_until=NULL,
+         lease_token=NULL
          WHERE id = $2
+         AND status = 'queued'
          RETURNING *`,
         [status, id]
     );
 
-    if (result.rows.length === 0) {
+    if (result.rows.length === 0) { 
+        const existing = await pool.query( 
+            `SELECT id, status FROM jobs WHERE id = $1`, [id] 
+        ); 
+
+        if (existing.rows.length === 0) { 
+            return { error: "Job not found" }; 
+        } 
+
         return {
-            error: "Job not found"
-        };
+            error: `Cannot change job from status '${existing.rows[0].status}' using this operation` 
+        }; 
+
     }
 
     return {
@@ -77,11 +93,6 @@ export async function claimJob() : Promise<Job | undefined>{
             SELECT *
             FROM jobs
             WHERE status = 'queued'
-            OR (
-                status='running' 
-                AND lease_until IS NOT NULL
-                AND lease_until < NOW()
-                )
             ORDER BY id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
@@ -150,6 +161,23 @@ export async function failJob(id: number ,leaseToken: string) : Promise<Job | un
          RETURNING *
         `
         ,[id,leaseToken]
+    );
+    return result.rows[0];
+}
+
+
+export async function renewLease(id: number ,leaseToken: string ) : Promise<Job | undefined> {
+    const result= await  pool.query(
+        `
+        UPDATE jobs
+        SET lease_until = NOW() + INTERVAL '90 seconds'
+        WHERE id = $1
+          AND status = 'running'
+          AND lease_token = $2
+          AND lease_until > NOW()
+        RETURNING *
+        `,
+        [id, leaseToken]
     );
     return result.rows[0];
 }
