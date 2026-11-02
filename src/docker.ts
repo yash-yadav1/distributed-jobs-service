@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 
@@ -8,21 +8,22 @@ interface DockerJobOptions {
     memoryMB ?: number;
     cpus ?: number;
     pidslimit ?: number;
+    signal ?: AbortSignal;
 }
 
 export async function runDockerJob( image: string,command: string,timeoutSeconds: number,options : DockerJobOptions={} ): Promise<{ stdout: string; stderr: string }> {
 
-    // 1. Set default resource limits.
+    //  Set default resource limits.
     const memoryMB = options.memoryMB ?? 256 ;
     const cpus = options.cpus ?? 0.5 ;
     const pidslimit = options.pidslimit ?? 128 ;
 
-    // 2. Validate the timeout.
+    //  Validate the timeout.
     if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {//whether it is positive value
         throw new Error("timeoutSeconds must be a positive number");
     }
 
-    // 3. Validate the resource limits.
+    //  Validate the resource limits.
     if (!Number.isSafeInteger(memoryMB) || memoryMB <= 0) {//whether it is positive and also whole integer
         throw new Error("memoryMB must be a positive integer");
     }
@@ -35,14 +36,16 @@ export async function runDockerJob( image: string,command: string,timeoutSeconds
         throw new Error("pidslimit must be a positive integer");
     }
 
-    // 4. Generate a unique name for this job's container.
+    //  Generate a unique name for this job's container.
     const containerName = `job-${randomUUID()}`;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
+    let cancelled = false;
+    let abortHandler:  (() =>void ) | undefined;
 
     try {
-        // 5. Start the container in detached mode with resource limits.
+        //  Start the container in detached mode with resource limits.
         await execFileAsync(
             "docker",
             [
@@ -59,8 +62,42 @@ export async function runDockerJob( image: string,command: string,timeoutSeconds
             ],
             { timeout: 10000 }
         );
+        
+        const signal = options.signal;
 
-        // 6. Create a Promise that rejects when the job times out.
+        const cancellationPromise = new Promise<never>((_, reject) => {
+            if (!signal) {
+                return;
+            }
+            abortHandler = () => {
+                cancelled = true;
+                void (async () => {
+                    try {
+                        await execFileAsync(
+                            "docker",
+                            ["stop", "--time", "1", containerName],
+                            { timeout: 5000 }
+                        );
+                    } catch (error) {
+                        console.error(
+                            `Failed to stop cancelled container ${containerName}:`,
+                            error
+                        );
+                    }
+
+                    reject(new Error("Job execution cancelled"));
+                })();
+            };
+
+            if (signal.aborted) {
+                abortHandler();
+            } else {
+                signal.addEventListener("abort", abortHandler, { once: true });
+            }
+        });
+
+
+        //  Create a Promise that rejects when the job times out.
         const timeoutPromise = new Promise<never>((_, reject) => {
             timer = setTimeout(async () => {
                 timedOut = true;
@@ -93,9 +130,16 @@ export async function runDockerJob( image: string,command: string,timeoutSeconds
 
         const { stdout: exitCodeOutput } = await Promise.race([
             waitPromise,
-            timeoutPromise
+            timeoutPromise,
+            cancellationPromise
         ]);
-        // 8. Check whether the job exceeded its timeout.
+
+        // check whether the job was cancelled. 
+        if (cancelled) {
+            throw new Error("Job execution cancelled");
+        }
+
+        //  Check whether the job exceeded its timeout.
         if (timedOut) {
             throw new Error(`Job timed out after ${timeoutSeconds} seconds`);
         }
@@ -135,6 +179,10 @@ export async function runDockerJob( image: string,command: string,timeoutSeconds
         return { stdout, stderr };
 
     } finally {
+
+        if (options.signal && abortHandler) {
+            options.signal.removeEventListener("abort", abortHandler);
+        }
         // 13. Cancel the timeout timer.
         if (timer !== undefined) {
             clearTimeout(timer);
